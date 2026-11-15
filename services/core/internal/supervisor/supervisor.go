@@ -39,6 +39,13 @@ type job struct {
 	active   bool
 	blocked  string
 	removing bool
+	// parent is the owning project's ID for an additional process; empty for a project.
+	parent string
+	// process is the additional process's ID; empty for a project.
+	process string
+	// save serializes writes of a project's record (only used on project jobs), so changes
+	// to the project and to its processes never overwrite each other.
+	save sync.Mutex
 }
 type Supervisor struct {
 	ops    sync.WaitGroup
@@ -59,6 +66,25 @@ func (s *Supervisor) Add(p model.Project) {
 	s.mu.Lock()
 	s.jobs[p.ID] = j
 	s.mu.Unlock()
+	for _, proc := range p.Processes {
+		s.addProcessJob(p, proc)
+	}
+}
+func (s *Supervisor) addProcessJob(parent model.Project, proc model.Process) *job {
+	j := &job{p: projects.ProcessProject(parent, proc), parent: parent.ID, process: proc.ID, state: model.Runtime{ProjectID: parent.ID, ActualState: "offline", Health: "offline"}, logs: NewLogbook(s.logdir, proc.ID)}
+	s.mu.Lock()
+	s.jobs[proc.ID] = j
+	s.mu.Unlock()
+	return j
+}
+
+// saveRuntime persists a project's execution so a restarted Core can detect a surviving
+// process. Additional processes are not persisted: their state is rebuilt on start.
+func (s *Supervisor) saveRuntime(j *job, state model.Runtime) error {
+	if j.parent != "" {
+		return nil
+	}
+	return s.store.Runtime(state)
 }
 func (s *Supervisor) Restore() error {
 	ps, e := s.store.Projects()
@@ -96,6 +122,13 @@ func (s *Supervisor) Restore() error {
 			_, _ = s.Action(p.ID, "start")
 		}
 	}
+	for _, p := range ps {
+		for _, proc := range p.Processes {
+			if proc.DesiredState == "running" {
+				_, _ = s.ProcessAction(p.ID, proc.ID, "start")
+			}
+		}
+	}
 	go s.monitor()
 	return nil
 }
@@ -114,11 +147,68 @@ func (s *Supervisor) get(id string) (*job, error) {
 	}
 	return j, nil
 }
+
+// project returns a project's own job, never an additional process.
+func (s *Supervisor) project(id string) (*job, error) {
+	j, e := s.get(id)
+	if e != nil || j.parent != "" {
+		return nil, errors.New("projeto não encontrado")
+	}
+	return j, nil
+}
+func (s *Supervisor) processJob(projectID, processID string) (*job, error) {
+	s.mu.RLock()
+	j := s.jobs[processID]
+	s.mu.RUnlock()
+	if j == nil || j.parent != projectID {
+		return nil, errors.New("processo não encontrado")
+	}
+	return j, nil
+}
+func (s *Supervisor) processJobs(projectID string) []*job {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []*job{}
+	for _, j := range s.jobs {
+		if j.parent == projectID {
+			out = append(out, j)
+		}
+	}
+	return out
+}
 func (s *Supervisor) Action(id, action string) (string, error) {
 	j, e := s.get(id)
 	if e != nil {
 		return "", e
 	}
+	if j.parent != "" {
+		return "", errors.New("projeto não encontrado")
+	}
+	payload := map[string]string{"projectId": id, "action": action}
+	return s.act(j, action, payload, func(desired string) error {
+		j.save.Lock()
+		defer j.save.Unlock()
+		return s.store.Desired(id, desired)
+	})
+}
+
+// ProcessAction starts, stops or restarts one additional process of a project.
+func (s *Supervisor) ProcessAction(projectID, processID, action string) (string, error) {
+	j, e := s.processJob(projectID, processID)
+	if e != nil {
+		return "", e
+	}
+	payload := map[string]string{"projectId": projectID, "processId": processID, "action": action}
+	return s.act(j, action, payload, func(desired string) error {
+		return s.updateProcess(projectID, processID, func(proc *model.Process) error {
+			proc.DesiredState = desired
+			return nil
+		})
+	})
+}
+
+func (s *Supervisor) act(j *job, action string, payload map[string]string, persist func(string) error) (string, error) {
+	var e error
 	if action != "start" && action != "stop" && action != "restart" {
 		return "", errors.New("ação inválida")
 	}
@@ -139,7 +229,7 @@ func (s *Supervisor) Action(id, action string) (string, error) {
 		return "", errors.New("projeto em exclusão ou já excluído")
 	}
 	op := auth.ID()
-	if e = s.store.Operation(op, "process", "pending", map[string]string{"projectId": id, "action": action}, ""); e != nil {
+	if e = s.store.Operation(op, "process", "pending", payload, ""); e != nil {
 		j.op.Unlock()
 		return "", e
 	}
@@ -147,7 +237,7 @@ func (s *Supervisor) Action(id, action string) (string, error) {
 	if action == "stop" {
 		desired = "stopped"
 	}
-	if e = s.store.Desired(id, desired); e != nil {
+	if e = persist(desired); e != nil {
 		j.op.Unlock()
 		return "", e
 	}
@@ -170,16 +260,16 @@ func (s *Supervisor) Action(id, action string) (string, error) {
 		if action != "stop" {
 			s.launch(j)
 			j.op.Unlock()
-			s.observeOperation(j, op, id, action)
+			s.observeOperation(j, op, payload)
 			return
 		}
-		_ = s.store.Operation(op, "process", "complete", map[string]string{"projectId": id, "action": action}, "")
+		_ = s.store.Operation(op, "process", "complete", payload, "")
 		j.op.Unlock()
 	}()
 	return op, nil
 }
 func (s *Supervisor) SetPort(id string, port int) error {
-	j, err := s.get(id)
+	j, err := s.project(id)
 	if err != nil {
 		return err
 	}
@@ -187,10 +277,19 @@ func (s *Supervisor) SetPort(id string, port int) error {
 		return errors.New("aguarde a operação em andamento neste projeto")
 	}
 	defer j.op.Unlock()
+	j.save.Lock()
+	defer j.save.Unlock()
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.removing {
 		return errors.New("projeto em exclusão ou já excluído")
+	}
+	if port > 0 {
+		for _, proc := range j.p.Processes {
+			if proc.Port == port {
+				return errors.New("a porta já é usada pelo processo " + proc.Name)
+			}
+		}
 	}
 	p := j.p
 	p.Port, p.UpdatedAt = port, time.Now().UTC()
@@ -205,7 +304,7 @@ func (s *Supervisor) SetPort(id string, port int) error {
 }
 
 func (s *Supervisor) SetStartup(id string, command []string, entry string, args []string) error {
-	j, err := s.get(id)
+	j, err := s.project(id)
 	if err != nil {
 		return err
 	}
@@ -213,6 +312,8 @@ func (s *Supervisor) SetStartup(id string, command []string, entry string, args 
 		return errors.New("aguarde a operação em andamento neste projeto")
 	}
 	defer j.op.Unlock()
+	j.save.Lock()
+	defer j.save.Unlock()
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.removing {
@@ -236,7 +337,7 @@ func (s *Supervisor) SetStartup(id string, command []string, entry string, args 
 }
 
 func (s *Supervisor) Remove(id string) error {
-	j, err := s.get(id)
+	j, err := s.project(id)
 	if err != nil {
 		return err
 	}
@@ -266,15 +367,38 @@ func (s *Supervisor) Remove(id string) error {
 	j.p.DesiredState = "stopped"
 	j.mu.Unlock()
 	s.stop(j)
+	extras := s.processJobs(id)
+	for _, x := range extras {
+		x.op.Lock()
+		x.mu.Lock()
+		x.removing = true
+		x.p.DesiredState = "stopped"
+		x.mu.Unlock()
+		s.stop(x)
+		x.op.Unlock()
+	}
 	// Only Cloudforge's own log files are removed. The project path is never used.
 	if err = j.logs.Remove(); err != nil {
 		return fmt.Errorf("o projeto foi parado, mas os logs não puderam ser removidos: %w", err)
 	}
+	for _, x := range extras {
+		_ = x.logs.Remove()
+	}
 	if err = s.store.DeleteProject(id); err != nil {
+		for _, x := range extras {
+			x.mu.Lock()
+			x.removing = false
+			x.mu.Unlock()
+		}
 		return err
 	}
 	s.mu.Lock()
 	delete(s.jobs, id)
+	for key, x := range s.jobs {
+		if x.parent == id {
+			delete(s.jobs, key)
+		}
+	}
 	s.mu.Unlock()
 	deleted = true
 	return nil
@@ -318,8 +442,12 @@ func (s *Supervisor) stop(j *job) {
 	j.state.Health = "offline"
 	state := j.state
 	j.mu.Unlock()
-	_ = s.store.Runtime(state)
-	j.logs.Add("system", "Aplicação parada. Rotas e túnel preservados.")
+	_ = s.saveRuntime(j, state)
+	if j.parent != "" {
+		j.logs.Add("system", "Processo parado.")
+	} else {
+		j.logs.Add("system", "Aplicação parada. Rotas e túnel preservados.")
+	}
 }
 func (s *Supervisor) loop(ctx context.Context, j *job) {
 	defer func() {
@@ -344,7 +472,7 @@ func (s *Supervisor) loop(ctx context.Context, j *job) {
 			j.state.Health = "offline"
 			state := j.state
 			j.mu.Unlock()
-			_ = s.store.Runtime(state)
+			_ = s.saveRuntime(j, state)
 			return
 		}
 		j.mu.Lock()
@@ -458,7 +586,7 @@ func (s *Supervisor) loop(ctx context.Context, j *job) {
 						j.state.Health = "running"
 						state := j.state
 						j.mu.Unlock()
-						if e = s.store.Runtime(state); e != nil {
+						if e = s.saveRuntime(j, state); e != nil {
 							tree.Close()
 							_ = cmd.Wait()
 							j.mu.Lock()
@@ -524,7 +652,7 @@ func (s *Supervisor) loop(ctx context.Context, j *job) {
 		policy := j.p.RestartPolicy
 		state := j.state
 		j.mu.Unlock()
-		_ = s.store.Runtime(state)
+		_ = s.saveRuntime(j, state)
 		j.logs.Add("system", fmt.Sprintf("Processo encerrado · código %d · %v", code, runError))
 		if desired != "running" || policy == "never" || (policy == "on-failure" && runError == nil) {
 			return
@@ -553,13 +681,41 @@ func (s *Supervisor) Views() []model.View {
 	routes, _ := s.store.Routes()
 	out := []model.View{}
 	usageSince := time.Now().Add(-usageWindow).UnixMilli()
+	type extraState struct {
+		state model.Runtime
+		usage []model.UsageSample
+	}
+	extras := map[string]extraState{}
 	for _, j := range jobs {
+		if j.parent == "" {
+			continue
+		}
+		j.mu.Lock()
+		first := sort.Search(len(j.usage), func(i int) bool { return j.usage[i].Time >= usageSince })
+		extras[j.process] = extraState{state: j.state, usage: slices.Clone(j.usage[first:])}
+		j.mu.Unlock()
+	}
+	for _, j := range jobs {
+		if j.parent != "" {
+			continue
+		}
 		j.mu.Lock()
 		v := model.View{Project: j.p, RuntimeInfo: j.state}
 		first := sort.Search(len(j.usage), func(i int) bool { return j.usage[i].Time >= usageSince })
 		v.UsageHistory = slices.Clone(j.usage[first:])
 		v.RuntimeInfo.TerminalReady = j.terminal != nil
 		j.mu.Unlock()
+		for _, proc := range v.Project.Processes {
+			x, ok := extras[proc.ID]
+			if !ok {
+				continue
+			}
+			pv := model.ProcessView{Process: proc, RuntimeInfo: x.state, UsageHistory: x.usage}
+			if len(pv.UsageHistory) == 0 {
+				pv.UsageHistory = nil
+			}
+			v.Processes = append(v.Processes, pv)
+		}
 		for _, r := range routes {
 			if r.ProjectID == v.ID {
 				v.Hostname = r.Hostname
@@ -579,12 +735,14 @@ func (s *Supervisor) Logs(id string) ([]model.Log, error) {
 	return j.logs.Lines(), nil
 }
 func (s *Supervisor) SetTerminalEnabled(id string, enabled bool) error {
-	j, err := s.get(id)
+	j, err := s.project(id)
 	if err != nil {
 		return err
 	}
 	j.op.Lock()
 	defer j.op.Unlock()
+	j.save.Lock()
+	defer j.save.Unlock()
 	j.mu.Lock()
 	project := j.p
 	j.mu.Unlock()
@@ -632,12 +790,11 @@ func (s *Supervisor) Shutdown() {
 	wg.Wait()
 	s.ops.Wait()
 }
-func (s *Supervisor) observeOperation(j *job, op, id, action string) {
+func (s *Supervisor) observeOperation(j *job, op string, payload map[string]string) {
 	ctx, cancel := context.WithTimeout(s.ctx, 16*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	payload := map[string]string{"projectId": id, "action": action}
 	finish := func(status, message string) {
 		j.mu.Lock()
 		defer j.mu.Unlock()

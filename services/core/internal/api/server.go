@@ -465,6 +465,10 @@ func (s *Server) projectLocal(w http.ResponseWriter, r *http.Request, parts []st
 		write(w, 200, map[string]string{"warning": warning})
 		return
 	}
+	if len(parts) >= 2 && parts[1] == "processes" {
+		s.processLocal(w, r, parts[0], parts[2:])
+		return
+	}
 	if len(parts) != 2 {
 		http.NotFound(w, r)
 		return

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -77,9 +78,21 @@ func run(ctx context.Context, p model.Project, log Logger, tool string, args ...
 	defer tree.Close()
 	return cmd.Wait()
 }
+
+// installLocks serializes preparation per project, so a project and its additional
+// processes never install dependencies into the same folder at the same time.
+var installLocks sync.Map
+
 func Prepare(ctx context.Context, s persistence.Repository, p model.Project, log Logger) (*exec.Cmd, error) {
 	if e := projects.Validate(&p); e != nil {
 		return nil, e
+	}
+	lock, _ := installLocks.LoadOrStore(p.ID, &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	if p.Runtime == "python" {
 		return python(ctx, s, p, log)

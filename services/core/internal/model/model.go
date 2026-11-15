@@ -15,8 +15,30 @@ type Project struct {
 	RestartPolicy    string    `json:"restartPolicy"`
 	TerminalEnabled  bool      `json:"terminalEnabled"`
 	Port             int       `json:"port"`
+	Processes        []Process `json:"processes,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+// Process is an additional long-running command of a project. It shares the project's
+// folder, runtime, dependencies and environment file, and has its own launch command,
+// port, restart policy, desired state and logs.
+type Process struct {
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	EntryPoint    string    `json:"entryPoint"`
+	StartCommand  []string  `json:"startCommand"`
+	Arguments     []string  `json:"arguments"`
+	Port          int       `json:"port"`
+	RestartPolicy string    `json:"restartPolicy"`
+	DesiredState  string    `json:"desiredState"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+type ProcessView struct {
+	Process
+	RuntimeInfo  Runtime       `json:"execution"`
+	UsageHistory []UsageSample `json:"usageHistory,omitempty"`
 }
 type EnvironmentVariable struct {
 	Key   string `json:"key"`
@@ -49,6 +71,8 @@ type View struct {
 	UsageHistory []UsageSample `json:"usageHistory,omitempty"`
 	Hostname     string        `json:"hostname,omitempty"`
 	RoutePort    int           `json:"routePort,omitempty"`
+	// Processes shadows Project.Processes so views carry each process's live state.
+	Processes []ProcessView `json:"processes,omitempty"`
 }
 type Dependencies struct {
 	EnvironmentFingerprint string    `json:"environmentFingerprint"`
