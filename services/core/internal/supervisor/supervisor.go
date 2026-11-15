@@ -200,7 +200,7 @@ func (s *Supervisor) ProcessAction(projectID, processID, action string) (string,
 	}
 	payload := map[string]string{"projectId": projectID, "processId": processID, "action": action}
 	return s.act(j, action, payload, func(desired string) error {
-		return s.updateProcess(projectID, processID, func(proc *model.Process) error {
+		return s.updateProcess(projectID, processID, func(_ model.Project, proc *model.Process) error {
 			proc.DesiredState = desired
 			return nil
 		})

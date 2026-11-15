@@ -13,6 +13,21 @@ export interface Execution {
 }
 export type UsageSample = Pick<Execution, "cpu" | "memory"> & { time: number };
 
+export interface ProjectProcess {
+  id: string;
+  name: string;
+  entryPoint: string;
+  startCommand: string[];
+  arguments: string[];
+  port: number;
+  restartPolicy: string;
+  desiredState: string;
+  createdAt: string;
+  updatedAt: string;
+  execution: Execution;
+  usageHistory?: UsageSample[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -32,6 +47,7 @@ export interface Project {
   usageHistory?: UsageSample[];
   hostname?: string;
   routePort?: number;
+  processes?: ProjectProcess[];
 }
 export interface System {
   hostname: string;

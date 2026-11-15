@@ -28,7 +28,10 @@ func TestAdditionalProcessLifecycle(t *testing.T) {
 	if _, err := exec.LookPath("npm"); err != nil {
 		t.Skip("npm not installed")
 	}
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, content := range map[string]string{
 		"package.json": `{"name":"process-fixture","version":"1.0.0","private":true,"scripts":{"start":"node server.js"}}`,
 		"server.js":    `console.log('main-alive'); setInterval(()=>{}, 1000);`,

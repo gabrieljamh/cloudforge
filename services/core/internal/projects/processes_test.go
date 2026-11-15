@@ -8,7 +8,10 @@ import (
 )
 
 func TestValidateProcess(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, content := range map[string]string{
 		"package.json": `{"scripts":{"start":"node server.js","notify":"node admin.js --notify"}}`,
 		"server.js":    "",
