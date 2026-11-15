@@ -57,10 +57,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		original := proxy.Director
 		proxy.Director = func(q *http.Request) {
 			original(q)
-			q.Header.Del("Forwarded")
-			q.Header.Del("X-Forwarded-Host")
-			q.Header.Del("X-Forwarded-For")
-			q.Header.Set("X-Forwarded-Proto", "https")
+			forwardHeaders(q)
 		}
 		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 			r.showError(w, req, "port")
@@ -69,4 +66,26 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	r.showError(w, req, "not-found")
+}
+
+// forwardHeaders replaces client-supplied forwarding headers with the visitor's address as
+// Cloudflare reported it. The public listener only accepts connections from this machine,
+// where cloudflared is the client, so CF-Connecting-IP is set by Cloudflare's edge and can be
+// trusted here. X-Forwarded-For starts with the visitor and the reverse proxy then appends the
+// tunnel's own address (127.0.0.1), giving the usual "visitor, proxy" chain. Without a valid
+// CF-Connecting-IP the visitor is unknown and only the tunnel's address is forwarded.
+func forwardHeaders(q *http.Request) {
+	q.Header.Del("Forwarded")
+	q.Header.Del("X-Forwarded-Host")
+	q.Header.Del("X-Forwarded-For")
+	q.Header.Del("X-Real-Ip")
+	q.Header.Set("X-Forwarded-Proto", "https")
+	visitor := net.ParseIP(strings.TrimSpace(q.Header.Get("Cf-Connecting-Ip")))
+	if visitor == nil {
+		q.Header.Del("Cf-Connecting-Ip")
+		return
+	}
+	q.Header.Set("Cf-Connecting-Ip", visitor.String())
+	q.Header.Set("X-Forwarded-For", visitor.String())
+	q.Header.Set("X-Real-Ip", visitor.String())
 }

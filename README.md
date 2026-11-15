@@ -122,7 +122,7 @@ Os processos compartilham a pasta, as dependências e o arquivo `.env` do projet
 3. Clique em **Criar endereço público** e depois em **Verificar acesso HTTPS**.
 4. Para publicar uma aplicação HTTP, abra **Projeto → Network → Subdomínio** e escolha domínio, nome e porta local.
 
-O túnel aponta para um roteador local que reconhece apenas os hosts cadastrados. Uma aplicação parada responde como indisponível, sem apagar seu DNS. Você pode alterar ou remover endereços no aplicativo; a limpeza de um CNAME anterior só ocorre se ele ainda apontar para o túnel desta instalação. Se uma operação parcial precisar de atenção, use **Cloudflare → Recuperar operações**.
+O túnel aponta para um roteador local que reconhece apenas os hosts cadastrados. Uma aplicação parada responde como indisponível, sem apagar seu DNS. As aplicações recebem o IP do visitante informado pela Cloudflare nos cabeçalhos `X-Forwarded-For` (primeira entrada), `X-Real-IP` e `CF-Connecting-IP`; valores enviados pelo próprio visitante são descartados. Você pode alterar ou remover endereços no aplicativo; a limpeza de um CNAME anterior só ocorre se ele ainda apontar para o túnel desta instalação. Se uma operação parcial precisar de atenção, use **Cloudflare → Recuperar operações**.
 
 O pacote Windows x64 inclui o `cloudflared` oficial com SHA-256 verificado. Em outros ambientes compatíveis, o Core usa uma instalação existente ou baixa uma versão oficial verificada. A criação real de túnel, DNS e HTTPS depende da sua conta e deve ser conferida nela. Veja também o [guia oficial de túneis gerenciados localmente](https://developers.cloudflare.com/tunnel/features/locally-managed-tunnels/create-local-tunnel/).
 
