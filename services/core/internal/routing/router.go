@@ -14,6 +14,18 @@ import (
 	"time"
 )
 
+// responseHeaderTimeout bounds how long an application may take to start answering.
+// AI proxies wait for the model's first output before sending headers, which can take
+// minutes (queues, reasoning), so this is generous. A client that disconnects still cancels
+// the request at once, and Cloudflare applies its own shorter limit to tunnelled traffic.
+var responseHeaderTimeout = 15 * time.Minute
+
+// newTransport connects to applications on this machine: an application that is not
+// listening fails within 5 seconds, a slow one may take up to responseHeaderTimeout.
+func newTransport() *http.Transport {
+	return &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, ResponseHeaderTimeout: responseHeaderTimeout, MaxIdleConns: 64, MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second}
+}
+
 type Router struct {
 	Store       persistence.Repository
 	Cloud       *cloudflare.Manager
@@ -50,9 +62,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", route.Port))
 		proxy := httputil.NewSingleHostReverseProxy(target)
-		r.once.Do(func() {
-			r.transport = &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext, ResponseHeaderTimeout: 30 * time.Second, MaxIdleConns: 64, MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second}
-		})
+		r.once.Do(func() { r.transport = newTransport() })
 		proxy.Transport = r.transport
 		original := proxy.Director
 		proxy.Director = func(q *http.Request) {

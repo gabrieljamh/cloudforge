@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestOfflineRouteIsPreserved(t *testing.T) {
@@ -100,5 +101,46 @@ func TestForwardHeadersCarryCloudflareVisitor(t *testing.T) {
 		if h.Get("Forwarded") != "" || h.Get("X-Forwarded-Host") != "" || h.Get("X-Forwarded-Proto") != "https" {
 			t.Fatalf("%s: forwarding headers not normalized: %v", c.name, h)
 		}
+	}
+}
+
+func TestTransportWaitsForSlowApplications(t *testing.T) {
+	if newTransport().ResponseHeaderTimeout < 10*time.Minute {
+		t.Fatal("applications that take minutes to answer would be cut off")
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(400 * time.Millisecond) // e.g. an AI proxy waiting for the first token
+		_, _ = w.Write([]byte("late answer"))
+	}))
+	defer backend.Close()
+	target, _ := url.Parse(backend.URL)
+	send := func() int {
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.Transport = newTransport()
+		w := httptest.NewRecorder()
+		proxy.ServeHTTP(w, httptest.NewRequest("GET", "https://app.example.com/", nil))
+		return w.Code
+	}
+	previous := responseHeaderTimeout
+	defer func() { responseHeaderTimeout = previous }()
+	responseHeaderTimeout = 100 * time.Millisecond
+	if code := send(); code != http.StatusBadGateway {
+		t.Fatalf("short limit should cut the slow answer, got %d", code)
+	}
+	responseHeaderTimeout = previous
+	if code := send(); code != http.StatusOK {
+		t.Fatalf("slow answer was cut off: %d", code)
+	}
+	// An application that is not listening still fails fast.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	dead, _ := url.Parse(closed.URL)
+	closed.Close()
+	proxy := httputil.NewSingleHostReverseProxy(dead)
+	proxy.Transport = newTransport()
+	start := time.Now()
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, httptest.NewRequest("GET", "https://app.example.com/", nil))
+	if w.Code != http.StatusBadGateway || time.Since(start) > 6*time.Second {
+		t.Fatalf("closed port: %d after %s", w.Code, time.Since(start))
 	}
 }
