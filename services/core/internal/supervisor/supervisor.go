@@ -789,6 +789,9 @@ func (s *Supervisor) Shutdown() {
 	}
 	wg.Wait()
 	s.ops.Wait()
+	for _, j := range jobs {
+		j.logs.Sync()
+	}
 }
 func (s *Supervisor) observeOperation(j *job, op string, payload map[string]string) {
 	ctx, cancel := context.WithTimeout(s.ctx, 16*time.Minute)
