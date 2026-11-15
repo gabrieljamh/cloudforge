@@ -347,6 +347,13 @@ const routes = [
     /^\/api\/projects\/[A-Za-z0-9_-]+\/(port|startup|terminal-enabled)$/,
   ],
   ["DELETE", /^\/api\/projects\/[A-Za-z0-9_-]+(?:\/route)?$/],
+  [
+    "POST",
+    /^\/api\/projects\/[A-Za-z0-9_-]+\/processes(?:\/[A-Za-z0-9_-]+\/action)?$/,
+  ],
+  ["GET", /^\/api\/projects\/[A-Za-z0-9_-]+\/processes\/[A-Za-z0-9_-]+\/logs$/],
+  ["PATCH", /^\/api\/projects\/[A-Za-z0-9_-]+\/processes\/[A-Za-z0-9_-]+$/],
+  ["DELETE", /^\/api\/projects\/[A-Za-z0-9_-]+\/processes\/[A-Za-z0-9_-]+$/],
   ["DELETE", /^\/api\/sessions\/[A-Za-z0-9_-]+$/],
 ];
 ipcMain.handle("core:request", async (event, method, route, body) => {
@@ -554,7 +561,12 @@ ipcMain.handle("core:watch", async (event, id) => {
     throw new Error("Projeto inválido");
   if (id) {
     const projects = await request("GET", "/api/projects");
-    if (!projects.some((p) => p.id === id))
+    if (
+      !projects.some(
+        (p) =>
+          p.id === id || (p.processes || []).some((proc) => proc.id === id),
+      )
+    )
       throw new Error("Projeto não encontrado");
   }
   watchedProject = id;

@@ -145,7 +145,7 @@ func TestAdditionalProcessLifecycle(t *testing.T) {
 		_, extra := view()
 		return extra.RuntimeInfo.ActualState == "offline"
 	})
-	if _, main = view(); main.RuntimeInfo.ActualState != "online" {
+	if main, _ = view(); main.RuntimeInfo.ActualState != "online" {
 		t.Fatal("stopping the process affected the project")
 	}
 	if err = sup.RemoveProcess(p.ID, proc.ID); err != nil {

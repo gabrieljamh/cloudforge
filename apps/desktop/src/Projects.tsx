@@ -45,6 +45,7 @@ import { ProjectUsage, RuntimeLogo } from "../../../packages/ui/ProjectCard";
 import { api, message } from "./api";
 import { EnvironmentPage } from "./Environment";
 import { ProjectFiles } from "./ProjectFiles";
+import { ProjectProcesses } from "./ProjectProcesses";
 import "./add-project.css";
 export function parseArguments(text: string): string[] {
   const tokens: string[] = [];
@@ -75,7 +76,7 @@ export function parseArguments(text: string): string[] {
   return tokens;
 }
 
-function formatArguments(tokens: string[] | null): string {
+export function formatArguments(tokens: string[] | null): string {
   return (tokens ?? [])
     .map((token) =>
       token && !/[\s'"]/.test(token)
@@ -505,6 +506,7 @@ export type ProjectSection =
   | "environment"
   | "domain"
   | "settings"
+  | "processes"
   | "risk";
 
 export function ProjectPage({
@@ -526,8 +528,14 @@ export function ProjectPage({
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [confirm, setConfirm] = useState("");
+    [confirm, setConfirm] = useState(""),
+    [logSource, setLogSource] = useState(project.id);
   const overview = section === "overview";
+  const source =
+    logSource === project.id ||
+    project.processes?.some((process) => process.id === logSource)
+      ? logSource
+      : project.id;
   const execution = project.execution;
   const online = execution.actualState === "online";
   const health =
@@ -634,6 +642,7 @@ export function ProjectPage({
                 environment: "Variáveis de ambiente",
                 domain: "Network",
                 settings: "Geral",
+                processes: "Processos",
                 risk: "Área de risco",
               }[section]
             }
@@ -664,6 +673,8 @@ export function ProjectPage({
       {overview || section === "logs" ? (
         <Logs
           project={project}
+          source={overview ? project.id : source}
+          onSourceChange={overview ? undefined : setLogSource}
           controls={
             overview && (
               <Actions
@@ -686,6 +697,15 @@ export function ProjectPage({
           cloud={cloud}
           onChanged={onChanged}
           onEditPort={() => onSectionChange("settings")}
+        />
+      ) : section === "processes" ? (
+        <ProjectProcesses
+          project={project}
+          onChanged={onChanged}
+          onShowLogs={(id) => {
+            setLogSource(id);
+            onSectionChange("logs");
+          }}
         />
       ) : section === "risk" ? (
         <ProjectRemoval project={project} onRemoved={onRemoved} />
@@ -879,11 +899,19 @@ function ProjectStartup({
 }
 function Logs({
   project,
+  source,
+  onSourceChange,
   controls,
 }: {
   project: Project;
+  source: string;
+  onSourceChange?: (source: string) => void;
   controls?: ReactNode;
 }) {
+  const process = project.processes?.find((item) => item.id === source);
+  const logPath = process
+    ? `/api/projects/${project.id}/processes/${process.id}/logs`
+    : `/api/projects/${project.id}/logs`;
   const [logs, setLogs] = useState<Log[]>([]),
     [q, setQ] = useState(""),
     [hiddenUntil, setHiddenUntil] = useState(0),
@@ -915,10 +943,7 @@ function Logs({
     const load = async () => {
       const requestVersion = ++version;
       try {
-        const result = await api<Log[]>(
-          "GET",
-          `/api/projects/${project.id}/logs`,
-        );
+        const result = await api<Log[]>("GET", logPath);
         if (active && requestVersion === version) {
           setLogs(result);
           setError("");
@@ -929,13 +954,13 @@ function Logs({
     };
     void load();
     const unsubscribe = window.cloudforge.onState((state) => {
-      if (active && state.logProject === project.id && state.logs) {
+      if (active && state.logProject === source && state.logs) {
         version++;
         setLogs(state.logs);
         setError("");
       }
     });
-    void window.cloudforge.watchProject(project.id).catch((e) => {
+    void window.cloudforge.watchProject(source).catch((e) => {
       if (active) setError(message(e));
     });
     const timer = setInterval(() => void load(), 10000);
@@ -945,7 +970,12 @@ function Logs({
       void window.cloudforge.watchProject("").catch(() => {});
       clearInterval(timer);
     };
-  }, [project.id]);
+  }, [project.id, source, logPath]);
+  useEffect(() => {
+    setLogs([]);
+    setHiddenUntil(0);
+    followOutput.current = true;
+  }, [source]);
   const filtered = logs.filter(
     (l) =>
       l.seq > hiddenUntil && l.message.toLowerCase().includes(q.toLowerCase()),
@@ -956,12 +986,30 @@ function Logs({
         {controls || (
           <div className="log-title">
             <Terminal size={16} />
-            <strong>Saída da aplicação</strong>
+            <strong>
+              {process ? `Saída de ${process.name}` : "Saída da aplicação"}
+            </strong>
             <span className="host-chip">Somente leitura</span>
           </div>
         )}
         <div className="log-tools">
-          {project.terminalEnabled && (
+          {onSourceChange && !!project.processes?.length && (
+            <label className="log-source">
+              Processo
+              <select
+                value={source}
+                onChange={(e) => onSourceChange(e.target.value)}
+              >
+                <option value={project.id}>Principal</option>
+                {project.processes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {!process && project.terminalEnabled && (
             <button
               className="button"
               disabled={openingTui}

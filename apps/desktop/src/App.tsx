@@ -13,6 +13,7 @@ import {
   Folder,
   Globe,
   HardDrive,
+  Layers,
   MemoryStick,
   Plus,
   RefreshCw,
@@ -56,6 +57,7 @@ const projectNavigation = [
 
 const projectSettingsNavigation = [
   { id: "settings", label: "Geral", icon: Settings2 },
+  { id: "processes", label: "Processos", icon: Layers },
   { id: "environment", label: "Variáveis de ambiente", icon: EnvironmentIcon },
   { id: "domain", label: "Network", icon: Globe },
   { id: "risk", label: "Área de risco", icon: ProjectRiskIcon },
