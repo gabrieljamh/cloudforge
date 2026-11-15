@@ -26,7 +26,7 @@ O aplicativo desktop administra tudo localmente. Um Core independente mantém os
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Projetos locais         | Cadastra uma pasta existente sem mover ou copiar o código. Detecta Python e Node.js.                                                                 |
 | Dependências            | Prepara `venv` e instala requisitos no Python; usa npm, pnpm ou Yarn conforme o projeto Node.js. Reutiliza o ambiente quando o cache ainda é válido. |
-| Processos               | Inicia, para e reinicia; persiste o estado desejado e oferece políticas de reinício: nunca, em falha ou sempre, exceto após parada manual.           |
+| Processos               | Inicia, para e reinicia; persiste o estado desejado e oferece políticas de reinício. Processos adicionais rodam ao lado da aplicação, com logs próprios. |
 | Observabilidade         | Mostra estado, CPU, RAM, tempo de execução e logs de `stdout`/`stderr`. Terminal interativo opcional no desktop.                                     |
 | Arquivos e configuração | Navega e edita arquivos de texto no desktop; gerencia porta HTTP e arquivos `.env` do projeto.                                                       |
 | Publicação              | Usa Cloudflare Tunnel para dar um subdomínio HTTPS ao painel e, opcionalmente, a cada aplicação HTTP.                                                |
@@ -102,6 +102,18 @@ Em **Aplicações → Adicionar projeto**, escolha a pasta original ou informe s
 O aplicativo prepara as dependências antes do primeiro início. Em Python, cria ou reutiliza `.venv`, `venv` ou `env` e instala requisitos pelo `pip` do ambiente. Em Node.js, detecta npm, pnpm ou Yarn pelo manifesto e lockfile; com `package-lock.json`, usa `npm ci`. Uma falha nessa etapa impede o processo de iniciar e aparece nos logs.
 
 Se o servidor lê a variável `PORT`, defina a mesma porta no Cloudforge e reinicie o projeto para aplicar a mudança. Se o código fixa uma porta, cadastre esse valor. A porta pode ser alterada em **Projeto → Geral → Porta HTTP**; a rota pública existente é atualizada junto com a configuração.
+
+### Processos adicionais
+
+Um projeto pode ter processos que rodam ao lado da aplicação principal, como um notificador, um worker de fila ou um bot. Abra **Projeto → Processos → Adicionar processo** e informe nome, comando, porta opcional e política de reinício.
+
+| Campo                 | Exemplo                                     | Observação                                                         |
+| --------------------- | ------------------------------------------- | ------------------------------------------------------------------ |
+| Comando Node.js       | `node admin.js --notify` ou `npm run worker` | Mesmas regras do processo principal; argumentos extras são aceitos. |
+| Arquivo Python        | `worker.py` com argumentos `--once`         | Um arquivo `.py` da pasta do projeto.                              |
+| Porta HTTP (opcional) | `9100`                                      | Diferente da porta do projeto e dos outros processos.              |
+
+Os processos compartilham a pasta, as dependências e o arquivo `.env` do projeto; a instalação de dependências nunca roda em paralelo. Cada processo tem logs próprios (selecione-o em **Logs**), métricas, estado desejado e reinício independentes, e volta a rodar quando o Core inicia se estava em execução. Excluir o projeto encerra e remove seus processos. Nesta versão, processos adicionais são administrados somente no desktop e não recebem subdomínio próprio.
 
 ## Acesso remoto com Cloudflare
 
